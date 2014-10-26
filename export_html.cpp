@@ -46,7 +46,7 @@ void writeTBody(QTextStream& writeStream,
 				<< "<td>" << "<a href=" << topNum + ".html>" << cellConnectInfoRef.cellName << "</a></td>\n"
 				<< "<td>" << "<a href=" << topNum + ".html>" << cellConnectInfoRef.nDropCall << "</a></td>\n"
 				<< "<td>" << "<a href=" << topNum + ".html>" << cellConnectInfoRef.nConnect << "</a></td>\n"
-				<< "<td>" << "<a href=" << topNum + ".html>" << QString::number(rateOfDrop, 'g', 2) + "%" << "</a></td>\n"
+				<< "<td>" << "<a href=" << topNum + ".html>" << QString::number(rateOfDrop, 'g', 2) << "</a></td>\n"
 				<< "<td>" << "<a href=" << topNum + ".html>" << cellConnectInfoRef.fAvgEcio << "</a></td>\n"
 				<< "<td>" << "<a href=" << topNum + ".html>" << cellConnectInfoRef.fAvgDropDist << "</a></td>\n"
 				<< "<td>" << "<a href=" << topNum + ".html>" << cellConnectInfoRef.fAvgOfMainRSSI << "</a></td>\n"

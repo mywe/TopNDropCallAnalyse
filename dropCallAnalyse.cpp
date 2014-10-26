@@ -90,6 +90,8 @@ void DropCallAnalyse::startAnalyse()
 		std::cout << "11" << std::endl;
 		analyseOverCoverage();
 		std::cout << "12" << std::endl;
+		analyseTrafficEquilibrium();
+		std::cout << "13" << std::endl;
 		updateResultFile();
 		exportHtml();
 		exportTopNHtml();
@@ -109,6 +111,7 @@ struct DropCountInfo
 	int nConnect;
 	int nDrop;
 	QMap<QString, int> imsiDropInfo;
+	QMap<QString, int> cellNumConnectInfo;
 };
 
 void DropCallAnalyse::analyseSingleUser()
@@ -139,6 +142,12 @@ void DropCallAnalyse::analyseSingleUser()
 				dropCountInfo.imsiDropInfo[imsiStr] = 1;
 			++dropCountInfo.nDrop;
 		}
+
+		QString cellPhoneNum = imsiInfoList[9];
+		if (dropCountInfo.cellNumConnectInfo.contains(cellPhoneNum))
+			++dropCountInfo.cellNumConnectInfo[cellPhoneNum];
+		else
+			dropCountInfo.cellNumConnectInfo[cellPhoneNum] = 1;
 		++dropCountInfo.nConnect;
 	}
 
@@ -164,6 +173,23 @@ void DropCallAnalyse::analyseSingleUser()
 			}
 			++itIMSI;
 		}
+
+		const QMap<QString, int>& cellNumInfoRef = dropCountInfo.cellNumConnectInfo;
+		auto itCellNum = cellNumInfoRef.begin();
+		while (itCellNum != cellNumInfoRef.end())
+		{
+			float fVal = itCellNum.value() / (float)dropCountInfo.nConnect;
+			if (!(fVal < 0.5))
+			{
+				m_userDropInfo[itDropInfo.key()] = true;
+
+				QString dropReason("用户行为");
+				DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[itDropInfo.key()];
+				dropReasonInfoRef.dropReasonMap[dropReason].push_back(itCellNum.key() + ":" + QString::number(fVal));
+				break;
+			}
+			++itCellNum;
+		}
 		++itDropInfo;
 	}
 }
@@ -186,12 +212,6 @@ void DropCallAnalyse::analyseCellStop()
 			QStringList infoList = readStream.readLine().split(',');
 			if (infoList[0] == "CDR掉话次数")
 			{
-				if (topN < TopNCount)
-				{
-					m_topNCells.push_back(infoList[1]);
-					++topN;
-				}
-
 				curID = infoList[1];
 				CellConnectInfo& cellConnectInfoRef = m_cellConnectInfo[curID];
 				cellConnectInfoRef.cellName = infoList[2];
@@ -203,6 +223,18 @@ void DropCallAnalyse::analyseCellStop()
 					cellConnectInfoRef.dropCntByD[i] = infoList[i + idxOfCnntCountByD].toInt();
 				for (int i = 0; i < 24; ++i)
 					cellConnectInfoRef.dropCntByH[i] = infoList[i + idxOfCnntCountByH].toInt();
+
+				if (topN < TopNCount
+					&& !((cellConnectInfoRef.nDropCall / (float)cellConnectInfoRef.nConnect) < 1.0))
+				{
+					m_topNCells.push_back(infoList[1]);
+					++topN;
+				}
+
+				if (infoList[6].toDouble() > -93.0)
+				{
+					m_alarmInfo[curID].typeCountMap.insert("RSSI问题", TypeCountInfo());
+				}
 			}
 			else if (curID == infoList[1] && infoList[0] == "呼叫次数")
 			{
@@ -243,6 +275,15 @@ void DropCallAnalyse::analyseCellStop()
 			{
 				CellConnectInfo& cellConnectInfoRef = m_cellConnectInfo[curID];
 				cellConnectInfoRef.fAvgOfSubRSSI = infoList[6].toDouble();
+			}
+			else if (curID == infoList[1] && infoList[0] == "Erasuare掉话次数")
+			{
+				if (infoList[4].toDouble() < 90.0)
+				{
+					QString dropReason("掉话类型");
+					DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[curID];
+					dropReasonInfoRef.dropReasonMap[dropReason].push_back("A2掉话高-建议核查边界邻区:" + infoList[4]);
+				}
 			}
 			else if (curID == infoList[1])
 				continue;
@@ -307,7 +348,9 @@ void DropCallAnalyse::analyseNeighborCell()
 		QStringList imsiInfoList = readStream.readLine().split(',');
 
 		int releaseVal = imsiInfoList[1].toInt();
-		if (releaseVal >=3074 && releaseVal <= 3078)
+		if (!(imsiInfos.contains(imsiInfoList[0])
+			&& imsiInfos[imsiInfoList[0]].relTime.addSecs(60) < QDateTime::fromString(imsiInfoList[2], "yyyy.MM.dd hh:mm:ss"))
+			&& releaseVal >=3074 && releaseVal <= 3078)
 		{
 			IMSIInfo& imsiInfoRef = imsiInfos[imsiInfoList[0]];
 			imsiInfoRef.connectTime = QDateTime::fromString(imsiInfoList[2], "yyyy.MM.dd hh:mm:ss");
@@ -315,6 +358,7 @@ void DropCallAnalyse::analyseNeighborCell()
 			imsiInfoRef.connectCarrier = imsiInfoList[4];
 			imsiInfoRef.relCarrier = imsiInfoList[5];
 			dropDists[imsiInfoList[5]].push_back(imsiInfoList[6].toDouble() * 30.5175);
+			continue;
 		}
 
 		if (imsiInfos.contains(imsiInfoList[0]))
@@ -334,22 +378,20 @@ void DropCallAnalyse::analyseNeighborCell()
 			QStringList idList = m_neighborCells[longID];
 			QString connectCarrier = m_shortID2LongID[imsiInfoList[4]];
 			
-			{
-				if (longID.size() == 0 || connectCarrier.size() == 0)
-					continue;
+			if (longID.size() == 0 || connectCarrier.size() == 0)
+				continue;
 
-				QStringList longIDList = longID.split('_');
-				QStringList connectCarrierList = connectCarrier.split('_');
+			QStringList longIDList = longID.split('_');
+			QStringList connectCarrierList = connectCarrier.split('_');
 
-				if (longIDList.size() < 4 || connectCarrierList.size() < 4)
-					continue;
+			if (longIDList.size() < 5 || connectCarrierList.size() < 5)
+				continue;
 
-				if (longIDList[0] == connectCarrierList[0]
-					&& longIDList[1] == connectCarrierList[1]
-					&& longIDList[2] == connectCarrierList[2]
-					&& longIDList[3] == connectCarrierList[3])
-						continue;
-			}
+			if (longIDList[0] == connectCarrierList[0]
+				&& longIDList[1] == connectCarrierList[1]
+				&& longIDList[2] == connectCarrierList[2]
+				&& longIDList[3] == connectCarrierList[3])
+				continue;
 
 			int idx = -1;
 			for (int i = 0; i < idList.size(); ++i)
@@ -366,6 +408,10 @@ void DropCallAnalyse::analyseNeighborCell()
 				if (!m_dropReasonInfoByH.contains(longID))
 					m_dropReasonInfoByH.insert(longID, QVector<QString>(dropReasonCount));
 
+				QString dropReason("优先级不合理");
+				DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[longID];
+				dropReasonInfoRef.dropReasonMap[dropReason].push_back(connectCarrier + "-" + QString::number(idx));
+
 				QVector<QString>& dropReasonByH = m_dropReasonInfoByH[longID];
 				
 				QString info = connectCarrier + "_优先级不合理掉话";
@@ -374,13 +420,17 @@ void DropCallAnalyse::analyseNeighborCell()
 				if (dropReasonByH[24].size() > 0)
 					dropReasonByH[24] += ";";
 				dropReasonByH[24] += info;
-
-				QString dropReason("优先级不合理");
-				DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[longID];
-				dropReasonInfoRef.dropReasonMap[dropReason].push_back(connectCarrier + "-" + QString::number(idx));
 			}
 			else if (idx == -1)
 			{
+				if(longIDList[4] == connectCarrierList[4]
+					&& (!(imsiInfoList[7].toDouble() > -12.0) || imsiInfoList[8].toDouble() > -15.0))
+					continue;
+
+				QString dropReason("邻区漏配");
+				DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[longID];
+				dropReasonInfoRef.dropReasonMap[dropReason].push_back(connectCarrier);
+
 				if (!m_dropReasonInfoByH.contains(longID))
 					m_dropReasonInfoByH.insert(longID, QVector<QString>(dropReasonCount));
 
@@ -391,10 +441,6 @@ void DropCallAnalyse::analyseNeighborCell()
 				if (dropReasonByH[24].size() > 0)
 					dropReasonByH[24] += ";";
 				dropReasonByH[24] += info;
-
-				QString dropReason("邻区漏配");
-				DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[longID];
-				dropReasonInfoRef.dropReasonMap[dropReason].push_back(connectCarrier);
 			}
 		}
 	}
@@ -1123,6 +1169,61 @@ void DropCallAnalyse::analyseOverCoverage()
 	}
 }
 
+void DropCallAnalyse::analyseTrafficEquilibrium()
+{
+	QMap<QString, QVector<QString> > carrierInSector;
+	auto itCarrier = m_shortID2LongID.begin();
+	while (itCarrier != m_shortID2LongID.end())
+	{
+		QStringList cellIDList = itCarrier.key().split('_');
+		QString sectorID = cellIDList[0] + "_" + cellIDList[1];
+		carrierInSector[sectorID].push_back(itCarrier.value());
+		++itCarrier;
+	}
+
+	auto iter = carrierInSector.begin();
+	while (iter != carrierInSector.end())
+	{
+		const QVector<QString>& cellIDs = iter.value();
+		QString maxCellID;
+		QString minCellID;
+		int maxVal = -1;
+		int minVal = 0x7FFFFFFF;
+
+		for (int i = 0; i < cellIDs.size(); ++i)
+		{
+			QString cellID = cellIDs[i];
+			if (m_carrierPrioType[cellID] == "DATA_PRIO")
+				continue;
+
+			if (maxVal < m_cellConnectInfo[cellID].nConnect)
+			{
+				maxVal = m_cellConnectInfo[cellID].nConnect;
+				maxCellID = cellID;
+			}
+
+			if (minVal > m_cellConnectInfo[cellID].nConnect)
+			{
+				minVal = m_cellConnectInfo[cellID].nConnect;
+				minCellID = cellID;
+			}
+		}
+
+		if (maxCellID.size() && minCellID.size())
+		{
+			float fVal = maxVal / (float)minVal;
+			if (!(fVal < 2.0))
+			{
+				QString dropReason("话务不均衡");
+				DropReasonInfo& dropReasonInfoRef = m_dropReasonInfo[maxCellID];
+				dropReasonInfoRef.dropReasonMap[dropReason].push_back(maxCellID + "/" + minCellID + ":" + QString::number(fVal));
+			}
+		}
+
+		++iter;
+	}
+}
+
 QString transLongIDToShortID(const QString& longID)
 {
 	QStringList longIDList = longID.split('_');
@@ -1426,15 +1527,17 @@ void DropCallAnalyse::analyseMMLChange()
 			QString carrierStr = line.mid(starPos, endPos - starPos).trimmed();
 			QString PnDist = m_dropReasonInfoByH.contains(carrierStr) ? m_dropReasonInfoByH[carrierStr][25] : "";
 
+			starPos = endPos + 1;
+			QString parameters = line.mid(starPos);
+			QStringList parameterList = parameters.split(',');
+			m_carrierPrioType[carrierStr] = parameterList[3];
+
 			if (!yesterMMLParams.contains(carrierStr))
 			{
 				tmpWriteStream << "," << PnDist << "," << "no" << "\n";
 				continue;
 			}
 
-			starPos = endPos + 1;
-			QString parameters = line.mid(starPos);
-			QStringList parameterList = parameters.split(',');
 			const QStringList& yesterMMLParamsRef = yesterMMLParams[carrierStr];
 
 			bool bSame = true;

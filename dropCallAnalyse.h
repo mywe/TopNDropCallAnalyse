@@ -60,6 +60,7 @@ protected:
 	void analyseJustShutDown();
 	void analyseShutDownLongTime();
 	void analyseOverCoverage();
+	void analyseTrafficEquilibrium();
 	void calCellPNDist();
 	void findNewCell();
 	void sortCellsByConnectCnt();
@@ -90,6 +91,7 @@ private:
 	QMap<QString, QVector<RefInfo> > m_connectCntRefInfo;
 	QMap<QString, QVector<QString> > m_dropReasonInfoByH;
 	QMap<QString, QString> m_shortID2LongID;
+	QMap<QString, QString> m_carrierPrioType;
 	QMap<QString, AlarmInfo> m_alarmInfo;
 	QMap<QString, DropReasonInfo> m_dropReasonInfo;
 };
